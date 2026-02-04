@@ -1,0 +1,141 @@
+<?php
+// J2ME ফোনে সেশন ধরে রাখার জন্য শুরু করছি
+session_start();
+
+// --- CONFIGURATION ---
+// কাইয়ুম বস, আপনার দেওয়া কনফিগারেশন এখানে সেট করা হলো
+define('API_KEY', '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');
+define('MODEL_ID', 'tngtech/deepseek-r1t2-chimera:free');
+
+// চ্যাট হিস্ট্রি রিসেট করার অপশন
+if (isset($_GET['action']) && $_GET['action'] == 'clear') {
+    $_SESSION['history'] = [];
+    header("Location: index.php");
+    exit;
+}
+
+// সেশন হিস্ট্রি না থাকলে তৈরি করো
+if (!isset($_SESSION['history'])) {
+    $_SESSION['history'] = [];
+}
+
+// ইউজার মেসেজ পাঠালে সেটা হ্যান্ডেল করা
+$error = "";
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['message'])) {
+    
+    $userMsg = trim($_POST['message']);
+    
+    // ১. ইউজারের মেসেজ হিস্ট্রিতে যোগ করি
+    $_SESSION['history'][] = ['role' => 'user', 'content' => $userMsg];
+
+    // ২. API কল করার জন্য ডেটা রেডি করা
+    // পুরো হিস্ট্রি পাঠালে টোকেন বেশি কাটবে, তাই শেষের ৫-৬টি মেসেজ পাঠাচ্ছি
+    $context = array_slice($_SESSION['history'], -6);
+    
+    // সিস্টেম প্রম্পট (ঐচ্ছিক)
+    array_unshift($context, ['role' => 'system', 'content' => 'You are a helpful AI assistant. Keep answers short for mobile screens.']);
+
+    $data = [
+        "model" => MODEL_ID,
+        "messages" => $context
+    ];
+
+    // ৩. cURL দিয়ে OpenRouter এ রিকোয়েস্ট পাঠানো (Server Side)
+    $ch = curl_init("https://openrouter.ai/api/v1/chat/completions");
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer " . API_KEY,
+        "Content-Type: application/json",
+        "HTTP-Referer: http://localhost/j2me-chat", // OpenRouter requirement
+        "X-Title: J2ME Chat"
+    ]);
+
+    $response = curl_exec($ch);
+    
+    if (curl_errno($ch)) {
+        $error = "CURL Error: " . curl_error($ch);
+    } else {
+        $json = json_decode($response, true);
+        
+        if (isset($json['choices'][0]['message']['content'])) {
+            $aiMsg = $json['choices'][0]['message']['content'];
+            // AI এর উত্তর হিস্ট্রিতে যোগ করি
+            $_SESSION['history'][] = ['role' => 'assistant', 'content' => $aiMsg];
+        } else {
+            $error = "API Error: " . ($json['error']['message'] ?? 'Unknown error');
+        }
+    }
+    curl_close($ch);
+}
+
+// --- মার্কডাউন ক্লিনার (J2ME তে বোল্ড/ইটালিক দেখানোর জন্য) ---
+function formatText($text) {
+    $text = htmlspecialchars($text);
+    $text = nl2br($text);
+    // **bold** কে <b>bold</b> এ কনভার্ট
+    $text = preg_replace('/\*\*(.*?)\*\*/', '<b>$1</b>', $text);
+    // `code` কে স্টাইল দেওয়া
+    $text = preg_replace('/`(.*?)`/', '<span style="background:#eee;color:red">$1</span>', $text);
+    return $text;
+}
+
+?>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//WAPFORUM//DTD XHTML Mobile 1.0//EN" "http://www.wapforum.org/DTD/xhtml-mobile10.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat</title>
+    <style type="text/css">
+        body { font-family: sans-serif; background: #fff; color: #000; margin: 0; padding: 0; font-size: small; }
+        .header { background: #0055cc; color: #fff; padding: 5px; font-weight: bold; text-align: center; }
+        .chat-box { padding: 5px; padding-bottom: 50px; }
+        .msg { margin-bottom: 8px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; }
+        .user { background: #e6f2ff; text-align: right; border-color: #b3d9ff; }
+        .ai { background: #f9f9f9; text-align: left; }
+        .role { font-weight: bold; font-size: x-small; color: #555; display: block; margin-bottom: 2px; }
+        .error { color: red; padding: 5px; text-align: center; border: 1px solid red; margin: 5px; }
+        .input-bar { background: #eee; padding: 5px; border-top: 1px solid #ccc; }
+        input[type=text] { width: 65%; padding: 4px; }
+        input[type=submit] { width: 30%; background: #0055cc; color: #fff; border: 1px solid #003399; padding: 4px; cursor: pointer; }
+        a { color: #0055cc; text-decoration: none; }
+    </style>
+</head>
+<body>
+
+<div class="header">DeepSeek J2ME</div>
+
+<?php if($error): ?>
+    <div class="error"><?php echo $error; ?></div>
+<?php endif; ?>
+
+<div class="chat-box">
+    <?php if (empty($_SESSION['history'])): ?>
+        <div style="text-align:center; color:#888; margin-top:20px;">
+            স্বাগতম কাইয়ুম বস!<br/>চ্যাট শুরু করুন।
+        </div>
+    <?php else: ?>
+        <?php foreach ($_SESSION['history'] as $msg): ?>
+            <div class="msg <?php echo $msg['role'] == 'user' ? 'user' : 'ai'; ?>">
+                <span class="role"><?php echo $msg['role'] == 'user' ? 'YOU' : 'AI'; ?></span>
+                <?php echo formatText($msg['content']); ?>
+            </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
+
+<div class="input-bar">
+    <form action="index.php" method="post">
+        <input type="text" name="message" placeholder="Ask anything..." autocomplete="off" />
+        <input type="submit" value="Send" />
+    </form>
+    <div style="text-align:center; margin-top:5px; font-size:x-small;">
+        <a href="index.php?action=clear">[ Clear Chat ]</a> | <a href="index.php">[ Refresh ]</a>
+    </div>
+</div>
+
+</body>
+</html>
